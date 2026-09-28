@@ -20,19 +20,16 @@ class MediaRepository(
 ) {
     private val TAG = "MediaRepository"
 
-    fun getMediaFiles(): Flow<List<MediaEntity>> = flow {
+    fun getMediaFiles(): Flow<List<MediaEntity>> = mediaDao.getAllMedia().flowOn(Dispatchers.IO)
+
+    suspend fun refreshMedia() {
         scanMediaFiles()
-        emitAll(mediaDao.getAllMedia())
-    }.flowOn(Dispatchers.IO)
+    }
 
     private suspend fun scanMediaFiles() {
         val mediaList = mutableListOf<MediaEntity>()
 
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        } else {
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        }
+        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
 
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -63,18 +60,6 @@ class MediaRepository(
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-
-                // CRITICAL: persistableUriPermission for Android 11+ (Scoped Storage)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    try {
-                        contentResolver.takePersistableUriPermission(
-                            contentUri,
-                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                    } catch (e: SecurityException) {
-                        Log.e(TAG, "Failed to take persistable permission for $contentUri: ${e.message}")
-                    }
-                }
 
                 mediaList.add(
                     MediaEntity(

@@ -26,14 +26,9 @@ class MediaRepositoryTest {
     }
 
     @Test
-    fun `getMediaFiles scans and returns media from MediaStore`() = runBlocking {
+    fun `refreshMedia scans and persists media from MediaStore`() = runBlocking {
         // Mock Cursor
         val mockCursor = mockk<android.database.Cursor>()
-        every { mockCursor.use(any()) } answers {
-            val block = firstArg<() -> Unit>()
-            block()
-            mockCursor
-        }
 
         // Setup column indices
         every { mockCursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID) } returns 0
@@ -54,20 +49,16 @@ class MediaRepositoryTest {
         every { mockCursor.getLong(5) } returns 1000L
         every { mockCursor.getLong(6) } returns 1000L
 
+        // Mock the use extension function behavior manually by mocking the cursor itself
+        // In Kotlin, cursor.use { ... } is an extension that calls close() at the end.
+        // We mock the cursor and allow the call.
+        every { mockCursor.close() } just Runs
+
         every { contentResolver.query(any(), any(), any(), any(), any()) } returns mockCursor
 
-        val mockList = listOf(
-            MediaEntity(123L, "content://media/external/audio/media/123", "Test Song.mp3", "audio/mpeg", 1024L, 200L, 1000L, 1000L)
-        )
+        repository.refreshMedia()
 
-        // Using a flow mock or simple list for the DAO
-        coEvery { mediaDao.getAllMedia() } returns kotlinx.coroutines.flow.flowOf(mockList)
-
-        val result = repository.getMediaFiles().first()
-
-        assertEquals(1, result.size)
-        assertEquals("Test Song.mp3", result[0].displayName)
         coVerify { mediaDao.clearAll() }
-        coVerify { mediaDao.insertAll(any()) }
+        coVerify { mediaDao.insertAll(match { it.size == 1 && it[0].displayName == "Test Song.mp3" }) }
     }
 }
