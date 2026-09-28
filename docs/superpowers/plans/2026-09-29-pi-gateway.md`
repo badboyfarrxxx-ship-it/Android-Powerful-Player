@@ -1,0 +1,77 @@
+# Pi Gateway Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Transform a Raspberry Pi into a WireGuard gateway that provides internet access and LAN routing to remote clients.
+
+**Architecture:** A kernel-level WireGuard instance with `nftables` for NAT/Masquerading and a lightweight Python API for device onboarding.
+
+**Tech Stack:** Raspberry Pi OS (Debian), WireGuard (Kernel), nftables/iptables, Python (FastAPI/Flask for onboarding).
+
+**Spec:** docs/superpowers/specs/2026-09-29-home-vpn-design.md
+
+## Global Constraints
+- **OS**: Raspberry Pi OS (64-bit recommended).
+- **Kernel**: Must support WireGuard (v5.6+).
+- **Network**: UDP port 51820 must be open/forwarded.
+- **Security**: Private keys must never be transmitted; only public keys.
+
+## Review Focus
+- **DNS Leaks**: Ensure the gateway correctly handles DNS queries from clients without leaking to the ISP.
+- **NAT Loops**: Verify that masquerading doesn't create routing loops for internal LAN traffic.
+- **Open Port Risk**: The onboarding API must be protected or temporary to avoid exposing the Pi.
+- **Kernel Panics**: Ensure WireGuard configuration doesn't crash the Pi on boot.
+- **DDNS Latency**: Verify clients can reconnect within 60s of a public IP change.
+
+---
+
+### Task 1: Base OS & WireGuard Installation
+
+**Files:**
+- Create: `scripts/server/install_wg.sh`
+
+- [ ] **Step 1: Install WireGuard and tools**
+  `sudo apt-get update && sudo apt-get install -y wireguard iptables`
+- [ ] **Step 2: Generate server key pair**
+  `wg genkey | tee privatekey | wg pubkey > publickey`
+- [ ] **Step 3: Create base `wg0.conf`**
+  Configure `Address = 10.0.0.1/24`, `ListenPort = 51820`, and the private key.
+- [ ] **Step 4: Enable IP Forwarding**
+  `echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf && sysctl -p`
+- [ ] **Step 5: Start and enable wg-quick**
+  `systemctl enable wg-quick@wg0 && systemctl start wg-quick@wg0`
+
+### Task 2: Firewall & NAT Configuration
+
+**Files:**
+- Create: `scripts/server/setup_firewall.sh`
+
+- [ ] **Step 1: Implement Masquerading**
+  Add a rule to `POSTROUTING` chain to MASQUERADE traffic from `10.0.0.0/24` on the `eth0` interface.
+- [ ] **Step 2: Configure LAN Access**
+  Add rules to allow `10.0.0.0/24` to reach specific internal IP ranges.
+- [ ] **Step 3: Verify routing**
+  Test with a dummy client to ensure packets exit the Pi and return.
+
+### Task 3: Onboarding API (The "Gatekeeper")
+
+**Files:**
+- Create: `server/onboarding/main.py`
+- Create: `server/onboarding/requirements.txt`
+
+- [ ] **Step 1: Implement `/register` endpoint**
+  Accepts a Client Public Key and Device Name; appends them to `wg0.conf` as a new peer.
+- [ ] **Step 2: Implement `wg syncconfig`**
+  Ensure the API triggers `wg syncconf wg0 <(wg-quick strip wg0)` to apply changes without dropping existing connections.
+- [ ] **Step 3: Return Server Public Key**
+  The API response must include the Pi's public key and the assigned client IP.
+
+### Task 4: DDNS Automation
+
+**Files:**
+- Create: `scripts/server/update_ddns.sh`
+
+- [ ] **Step 1: Implement DDNS client**
+  A curl-based script to update the chosen DDNS provider's record.
+- [ ] **Step 2: Schedule via Cron**
+  Run the update every 15 minutes.

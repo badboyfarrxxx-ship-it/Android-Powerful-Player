@@ -1,0 +1,65 @@
+# Home-Server VPN Design Specification
+
+## 1. Overview
+A cross-platform VPN system consisting of a Raspberry Pi gateway and dedicated clients for Android and Windows. The system leverages the WireGuard protocol for high-performance, secure tunneling, providing remote access to a home network and encrypted internet egress.
+
+## 2. System Architecture
+
+### 2.1 Server Gateway (Raspberry Pi)
+The server acts as the central hub and network gateway.
+
+- **Protocol**: Native Linux Kernel WireGuard.
+- **Connectivity**:
+    - **DDNS**: Integration with a Dynamic DNS provider to resolve the home's changing public IP.
+    - **NAT**: UDP port 51820 forwarded from the router to the Pi.
+- **Routing**:
+    - `net.ipv4.ip_forward=1` enabled.
+    - **Masquerading**: `nftables`/`iptables` POSTROUTING rule to route VPN traffic to the WAN.
+    - **LAN Access**: Firewall rules allowing the VPN subnet (e.g., `10.0.0.0/24`) to access specific internal LAN resources.
+- **Management**: Configuration via `/etc/wireguard/wg0.conf`.
+
+### 2.2 Android Client
+A native Android application that intercepts system traffic.
+
+- **Tunnelling**: Implementation of `VpnService` to create a virtual TUN interface.
+- **Packet Pipeline**:
+    - **Read**: Pull raw IP packets from the TUN file descriptor.
+    - **Process**: Encapsulate and encrypt packets using the WireGuard protocol.
+    - **Transport**: Send encrypted packets via UDP to the Pi gateway.
+- **Performance**:
+    - Use of `DirectByteBuffer` to minimize GC overhead.
+    - Native C++ implementation of ChaCha20-Poly1305 encryption via JNI.
+- **Persistence**: Foreground service with a persistent notification to prevent OS termination.
+
+### 2.3 Windows Client
+A system-level VPN client for Windows.
+
+- **Tunnelling**: Integration with the `wireguard-nt` kernel driver for native TUN performance.
+- **Architecture**:
+    - **Background Service**: A Windows Service handles the tunnel lifecycle and packet routing independently of the UI.
+    - **Control UI**: A tray application for connection management and throughput monitoring.
+- **Routing**: Programmatic manipulation of the Windows routing table to set the VPN adapter as the default gateway.
+- **DNS**: Overriding system DNS settings to use the Pi's DNS, preventing DNS leaks.
+
+## 3. Security & Handshake
+
+### 3.1 Trust Model
+The system uses a Peer-to-Peer public key architecture. Each device generates a unique Private/Public key pair.
+
+### 3.2 Onboarding Flow
+1. **Key Generation**: Client generates a key pair on first launch.
+2. **Registration**: Client sends its Public Key to the Pi via a secure setup endpoint.
+3. **Approval**: The administrator approves the device on the Pi.
+4. **Provisioning**: The Pi returns its own Public Key and the client's assigned internal IP address.
+
+### 3.3 Connection Lifecycle
+- **Handshake**: 1-RTT encrypted handshake establishing a symmetric session key.
+- **Session Rotation**: Keys are rotated every few minutes for Perfect Forward Secrecy.
+- **Keep-alives**: UDP packets sent every 25 seconds to maintain NAT mapping on home routers.
+- **Kill Switch**: Optional Android setting to block all traffic if the tunnel is disconnected.
+
+## 4. Success Criteria
+- **Connectivity**: Clients can reach the internet and internal LAN resources via the Pi.
+- **Performance**: Near-native throughput on Raspberry Pi 4+ hardware.
+- **Stability**: Connection persists through Android backgrounding and Windows sleep cycles.
+- **Privacy**: No DNS leaks; all traffic is encrypted between client and Pi.

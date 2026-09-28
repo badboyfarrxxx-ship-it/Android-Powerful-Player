@@ -1,0 +1,84 @@
+# Android Client Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A high-performance Android app that routes all system traffic through the Raspberry Pi gateway using the WireGuard protocol.
+
+**Architecture:** A `VpnService` that manages a native C++ packet loop. The native layer handles the heavy lifting of ChaCha20-Poly1305 encryption/decryption to avoid JVM overhead.
+
+**Tech Stack:** Kotlin (Jetpack Compose), C++ (JNI), Android `VpnService` API, WireGuard protocol.
+
+**Spec:** docs/superpowers/specs/2026-09-29-home-vpn-design.md
+
+## Global Constraints
+- **Battery**: Encryption must be native to minimize CPU wake-ups.
+- **Privacy**: DNS must be routed through the tunnel to prevent leaks.
+- **Reliability**: Foreground service must be used to prevent OS termination.
+- **Security**: Private keys are stored in Android Keystore (where possible) or encrypted shared preferences.
+
+## Review Focus
+- **MTU Issues**: Large packets causing fragmentation or drops (WireGuard default is 1420).
+- **Memory Leaks**: Native buffers must be explicitly freed to avoid OOM in the `VpnService` loop.
+- **Context Switching**: Minimize transitions between Kotlin and C++ in the packet loop.
+- **DNS Leaks**: Verify that `VpnService.Builder.addDnsServer()` is actually honored.
+
+---
+
+### Task 1: Native Encryption Core (C++)
+
+**Files:**
+- Create: `jni/vpn/WireGuardCore.h`
+- Create: `jni/vpn/WireGuardCore.cpp`
+
+**Interfaces:**
+- Produces: `native encryptPacket(ByteBuffer plain, ByteBuffer cipher)`, `native decryptPacket(ByteBuffer cipher, ByteBuffer plain)`
+
+- [ ] **Step 1: Implement ChaCha20-Poly1305**
+  Integrate a lean C++ implementation of the encryption primitive.
+- [ ] **Step 2: Implement Packet Encapsulation**
+  Create the function to wrap raw IP packets into WireGuard UDP packets.
+- [ ] **Step 3: Implement Packet Decapsulation**
+  Create the inverse function to strip headers and verify integrity.
+- [ ] **Step 4: JNI Bridge**
+  Expose `encryptPacket` and `decryptPacket` to Kotlin using `GetDirectBufferAddress`.
+- [ ] **Step 5: Verify with Unit Tests**
+  Implement a simple C++ test to ensure an encrypted packet can be decrypted back to the original plaintext.
+
+### Task 2: `VpnService` Implementation
+
+**Files:**
+- Create: `app/src/main/java/com/powerfulvpn/vpn/HomeVpnService.kt`
+
+**Interfaces:**
+- Consumes: `WireGuardCore` native methods.
+- Produces: `VpnStatus` state updates to the ViewModel.
+
+- [ ] **Step 1: Establish the TUN Interface**
+  Use `VpnService.Builder` to configure IP, DNS, and the default route (`0.0.0.0/0`).
+- [ ] **Step 2: Implement the Packet Loop**
+  Create a dedicated thread that reads from the `ParcelFileDescriptor`, calls the native encryption, and sends via UDP.
+- [ ] **Step 3: Implement the Receive Loop**
+  Listen for UDP packets from the Pi, decrypt them natively, and write back to the TUN interface.
+- [ ] **Step 4: Handle Lifecycle**
+  Manage `start()` and `stop()` calls, ensuring the `VpnService` is correctly torn down and the interface is closed.
+- [ ] **Step 5: Foreground Service Integration**
+  Implement the notification and `startForeground` call to prevent OS termination.
+
+### Task 3: Connection Management & UI
+
+**Files:**
+- Create: `app/src/main/java/com/powerfulvpn/ui/VpnViewModel.kt`
+- Create: `app/src/main/java/com/powerfulvpn/ui/VpnScreen.kt`
+
+**Interfaces:**
+- Consumes: `HomeVpnService` start/stop intents.
+- Produces: UI state for the Connection Toggle and Metrics display.
+
+- [ ] **Step 1: Implement State Management**
+  Use `StateFlow` to track `CONNECTED`, `DISCONNECTED`, and `CONNECTING` states.
+- [ ] **Step 2: Create the Connection Toggle**
+  A main button to trigger the `VpnService` via an `Intent`.
+- [ ] **Step 3: Implement Throughput Monitoring**
+  Calculate real-time KB/s (upload/download) from the packet loop and surface it in the UI.
+- [ ] **Step 4: Implement the Onboarding Flow**
+  Create a screen to enter the server domain and handle the `/register` API call to the Pi gateway.
