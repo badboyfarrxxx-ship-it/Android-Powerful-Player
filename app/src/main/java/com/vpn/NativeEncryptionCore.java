@@ -18,4 +18,12 @@ public class NativeEncryptionCore {
         ByteBuffer key, ByteBuffer nonce,
         ByteBuffer plaintext, int plaintextPos
     );
+
+    public native void maskPacket(
+        ByteBuffer packet, int pos, int len, long seed, long counter
+    );
+
+    public native void unmaskPacket(
+        ByteBuffer packet, int pos, int len, long seed, long counter
+    );
 }

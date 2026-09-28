@@ -11,6 +11,26 @@
 #include <thread>
 #include <openssl/crypto.h>
 
+// Secure container for cryptographic keys to prevent heap lingering
+struct SecureKey {
+    std::vector<uint8_t> data;
+    SecureKey() = default;
+    explicit SecureKey(size_t size) : data(size) {}
+    SecureKey(const uint8_t* src, size_t size) : data(src, src + size) {}
+    ~SecureKey() {
+        if (!data.empty()) {
+            OPENSSL_cleanse(data.data(), data.size());
+        }
+    }
+    SecureKey(const SecureKey&) = delete;
+    SecureKey& operator=(const SecureKey&) = delete;
+    SecureKey(SecureKey&&) = default;
+    SecureKey& operator=(SecureKey&&) = default;
+
+    const uint8_t* bytes() const { return data.data(); }
+    size_t size() const { return data.size(); }
+};
+
 using json = nlohmann::json;
 
 #pragma comment(lib, "wininet.lib")
@@ -26,13 +46,13 @@ bool VpnService::RegisterDevice(const std::string& domain, const std::string& de
     uint8_t pub[32], priv[32];
     generate_x25519_keypair(pub, priv);
 
-    clientPublicKey_ = std::string((char*)pub, 32); // Simplified for example
-    clientPrivateKey_ = std::string((char*)priv, 32);
+    clientPublicKey_ = SecureKey(pub, 32);
+    clientPrivateKey_ = SecureKey(priv, 32);
 
     // 2. Call Pi Gateway /register API
     std::stringstream url;
     url << "http://" << domain << ":8000/register?device_name=" << deviceName
-        << "&public_key=" << clientPublicKey_;
+        << "&public_key=" << std::string((char*)clientPublicKey_.bytes(), clientPublicKey_.size());
 
     std::string cmd = "curl -s \"" + url.str() + "\"";
 
@@ -99,7 +119,7 @@ bool VpnService::Start() {
 
 void VpnService::ServiceLoop() {
     while (isRunning_) {
-        auto now = std::chrono::system_clock::now();
+        auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::hours>(now - lastRotation_).count() >= 24) {
             Log("Triggering secure session key rotation...");
 
@@ -119,14 +139,14 @@ void VpnService::ServiceLoop() {
 
             if (networkManager_.sendPacket(packet)) {
                 Log("Rotation packet sent successfully. Updating local keys...");
-                clientPublicKey_ = std::string((char*)newPub, 32);
-                clientPrivateKey_ = std::string((char*)newPriv, 32);
+                clientPublicKey_ = SecureKey(newPub, 32);
+                clientPrivateKey_ = SecureKey(newPriv, 32);
                 lastRotation_ = now;
             } else {
                 Log("Rotation packet failed to send.");
             }
 
-            // Securely zero memory
+            // Securely zero temporary buffers
             OPENSSL_cleanse(newPriv, 32);
             OPENSSL_cleanse(newPub, 32);
         }

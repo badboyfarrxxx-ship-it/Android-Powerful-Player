@@ -40,9 +40,17 @@ public class HomeVpnService extends VpnService {
 
     private final ByteBuffer key = ByteBuffer.allocateDirect(32);
     private final ByteBuffer nonce = ByteBuffer.allocateDirect(12);
+    private final ByteBuffer sessionPrivKey = ByteBuffer.allocateDirect(32);
+    private final ByteBuffer sessionPubKey = ByteBuffer.allocateDirect(32);
 
     private final AtomicLong bytesUp = new AtomicLong(0);
     private final AtomicLong bytesDown = new AtomicLong(0);
+
+    // XOR Masking State
+    private long maskingSeed = 0xDEADBEEFCAFEBABE L;
+    private long txCounter = 0;
+    private long rxCounter = 0;
+    private int packetCount = 0;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -76,7 +84,7 @@ public class HomeVpnService extends VpnService {
 
         try {
             vpnInterface = builder.establish();
-            tunChannel = vpnInterface.getFileDescriptor().getChannel();
+            tunChannel = java.nio.channels.Channels.newChannel(vpnInterface.getFileDescriptor());
 
             udpChannel = DatagramChannel.open();
             udpChannel.configureBlocking(true);
@@ -90,9 +98,68 @@ public class HomeVpnService extends VpnService {
             readThread.start();
             writeThread.start();
 
+            // Schedule daily key rotation
+            scheduleKeyRotation();
+
             Log.i(TAG, "VPN Interface established and loops started");
         } catch (IOException e) {
             Log.e(TAG, "Failed to establish VPN interface", e);
+        }
+    }
+
+    private void scheduleKeyRotation() {
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (isRunning) {
+                    rotateSessionKeys();
+                    handler.postDelayed(this, 24 * 60 * 60 * 1000L);
+                }
+            }
+        }, 24 * 60 * 60 * 1000L);
+    }
+
+    private void rotateSessionKeys() {
+        Log.i(TAG, "Triggering daily session key rotation...");
+
+        int result = nativeCore.generateSessionKeyPair(sessionPubKey, sessionPrivKey);
+        if (result != 0) {
+            Log.e(TAG, "Failed to generate session key pair: " + result);
+            return;
+        }
+
+        try {
+            // Control Packet Format: [Type: 1 byte][Length: 1 byte][PubKey: 32 bytes]
+            ByteBuffer controlPacket = ByteBuffer.allocateDirect(34);
+            controlPacket.put((byte) 0xCF); // Control packet marker
+            controlPacket.put((byte) 32);    // Payload length
+
+            sessionPubKey.rewind();
+            controlPacket.put(sessionPubKey);
+            controlPacket.flip();
+
+            // Encrypt the control packet using current tunnel key
+            ByteBuffer encryptedControl = ByteBuffer.allocateDirect(34 + 16);
+            int encResult = nativeCore.encryptPacket(
+                    controlPacket, 0, 34,
+                    key, nonce,
+                    encryptedControl, 0
+            );
+
+            if (encResult == 0) {
+                encryptedControl.flip();
+                // Apply XOR masking
+                nativeCore.maskPacket(encryptedControl, 0, encryptedControl.remaining(), maskingSeed, txCounter++);
+
+                InetSocketAddress remoteAddress = new InetSocketAddress(gatewayIp, gatewayPort);
+                udpChannel.send(encryptedControl, remoteAddress);
+                Log.i(TAG, "Session key sync packet sent to gateway");
+            } else {
+                Log.e(TAG, "Failed to encrypt control packet: " + encResult);
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Error sending key rotation packet", e);
         }
     }
 
@@ -117,8 +184,19 @@ public class HomeVpnService extends VpnService {
 
                 if (result == 0) {
                     encryptedBuffer.flip();
+
+                    // Mask packet before UDP send
+                    nativeCore.maskPacket(encryptedBuffer, 0, encryptedBuffer.remaining(), maskingSeed, txCounter++);
+
                     udpChannel.send(encryptedBuffer, remoteAddress);
                     bytesUp.addAndGet(read);
+
+                    // Seed rotation every 100 packets
+                    if (++packetCount % 100 == 0) {
+                        maskingSeed ^= 0x5555555555555555L;
+                        txCounter = 0;
+                        rxCounter = 0;
+                    }
                 }
             }
         } catch (Exception e) {
@@ -136,6 +214,9 @@ public class HomeVpnService extends VpnService {
                 int read = udpChannel.receive(ciphertextBuffer);
                 if (read == -1) break;
                 ciphertextBuffer.flip();
+
+                // Unmask packet immediately after UDP receive
+                nativeCore.unmaskPacket(ciphertextBuffer, 0, ciphertextBuffer.remaining(), maskingSeed, rxCounter++);
 
                 plaintextBuffer.clear();
                 int result = nativeCore.decryptPacket(

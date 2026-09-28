@@ -1,16 +1,43 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import asyncio
 import subprocess
 import os
 import secrets
 import time
 import json
 from typing import Dict, Optional
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 
 app = FastAPI(title="VPN Onboarding API")
 
-# Configuration
-WG_CONF_PATH = "/etc/wireguard/wg0.conf"
+async def cleanup_shadow_peer(peer_id_internal: str, shadow_ip: str, primary_ip: str):
+    """Removes the shadow peer and the NAT rule after the grace period."""
+    await asyncio.sleep(ROTATION_GRACE_PERIOD)
+    try:
+        # 1. Remove NAT rule specifically for this shadow IP
+        subprocess.run(f"sudo nft delete rule ip nat POSTROUTING ip saddr {shadow_ip} snat to {primary_ip}", shell=True)
+
+        # 2. Remove shadow peer from wg0.conf
+        if os.path.exists(WG_CONF_PATH):
+            with open(WG_CONF_PATH, "r") as f:
+                content = f.read()
+
+            import re
+            # Match the specific [Peer] block that contains this shadow_ip in AllowedIPs
+            # We look for the block starting with [Peer], containing any PublicKey,
+            # and specifically the shadow_ip/32.
+            pattern = r"\[Peer\]\s*PublicKey = .*?\s*AllowedIPs = " + re.escape(shadow_ip) + r"/32\s*"
+            new_content = re.sub(pattern, "", content, flags=re.DOTALL)
+
+            with open(WG_CONF_PATH, "w") as f:
+                f.write(new_content)
+
+        # 3. Apply changes
+        subprocess.run(f"sudo wg syncconf wg0 <(sudo wg-quick strip wg0)", shell=True, check=True)
+        print(f"Cleanup completed for shadow peer {shadow_ip}")
+    except Exception as e:
+        print(f"Error during shadow peer cleanup: {e}")
 SERVER_PUB_KEY_PATH = "/etc/wireguard/keys/publickey"
 PENDING_PEERS_PATH = "/etc/wireguard/pending_peers.json"
 PEER_STATE_PATH = "/etc/wireguard/peer_state.json" # Track rotation and grace periods
@@ -194,16 +221,17 @@ async def verify_device(req: VerificationRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/rotate")
-async def rotate_key(req: RotationRequest):
+async def rotate_key(req: RotationRequest, background_tasks: BackgroundTasks):
     """
-    Handles secure key rotation request.
-    Implements the 5-minute grace period by updating peer state.
+    Handles secure key rotation request with Zero-Downtime.
+    Implements Dual-Peer Overlap:
+    1. New key takes the primary IP.
+    2. Old key is moved to a temporary shadow IP.
+    3. nftables NATs shadow IP traffic back to primary IP.
     """
     try:
         peer_state = load_peer_state()
 
-        # Find the peer regardless of whether the req.peer_id is the current or old key
-        # (Rotation request should ideally come from the current active key)
         peer_entry = None
         peer_id_internal = None
 
@@ -216,45 +244,62 @@ async def rotate_key(req: RotationRequest):
         if not peer_entry:
             raise HTTPException(status_code=404, detail="Active peer not found.")
 
-        # 1. Store current key as previous key for the grace period
         old_pub_key = peer_entry["current_pub_key"]
         new_pub_key = req.new_public_key
+        primary_ip = peer_entry["assigned_ip"]
+
+        # Dynamic Shadow IP Allocation
+        # If primary IP is 10.0.0.X, shadow IP is 10.0.0.X + 100
+        # This ensures no collisions as long as X <= 154 (Total subnet 254)
+        try:
+            ip_suffix = int(primary_ip.split(".")[-1])
+            shadow_suffix = ip_suffix + 100
+            if shadow_suffix > 254:
+                # Fallback for high IPs: wrap around or use a different offset
+                # For this subnet, we assume primary IPs are assigned 2-154
+                raise HTTPException(status_code=500, detail="Primary IP too high for standard shadow offset")
+            shadow_ip = f"{VPN_SUBNET}.{shadow_suffix}"
+        except (ValueError, IndexError):
+            raise HTTPException(status_code=500, detail="Invalid primary IP format")
 
         peer_entry["previous_pub_key"] = old_pub_key
         peer_entry["current_pub_key"] = new_pub_key
         peer_entry["last_rotation_time"] = time.time()
 
-        # 2. Update wg0.conf
-        # We need to replace the old PublicKey line with the new one for the specific AllowedIPs
-        client_ip = peer_entry["assigned_ip"]
-
+        # Update wg0.conf
         if os.path.exists(WG_CONF_PATH):
             with open(WG_CONF_PATH, "r") as f:
-                lines = f.readlines()
+                content = f.read()
 
-            new_lines = []
-            found_peer = False
-            for i in range(len(lines)):
-                if "AllowedIPs = " + client_ip + "/32" in lines[i]:
-                    # Found the peer block. The PublicKey is usually the line before.
-                    # This is a simple replacement; in production, a more robust parser is needed.
-                    if i > 0 and "PublicKey =" in lines[i-1]:
-                        new_lines[-1] = f"PublicKey = {new_pub_key}\n"
-                    found_peer = True
-                new_lines.append(lines[i])
+            # 1. Replace primary peer's public key
+            import re
+            # This regex finds the [Peer] block that has the primary IP and replaces its PublicKey
+            pattern = r"(\[Peer\]\s*PublicKey = )[a-zA-Z0-9+/=]{44}(\s*AllowedIPs = " + re.escape(primary_ip) + r"/32)"
+            updated_content = re.sub(pattern, r"\1" + new_pub_key + r"\2", content)
+
+            # 2. Add shadow peer for the old key
+            shadow_block = f"\n[Peer]\nPublicKey = {old_pub_key}\nAllowedIPs = {shadow_ip}/32\n"
+            updated_content += shadow_block
 
             with open(WG_CONF_PATH, "w") as f:
-                f.writelines(new_lines)
+                f.write(updated_content)
 
-        # 3. Apply changes without dropping connection
-        cmd = f"sudo wg syncconf wg0 <(sudo wg-quick strip wg0)"
-        subprocess.run(cmd, shell=True, check=True)
+        # Apply changes
+        subprocess.run(f"sudo wg syncconf wg0 <(sudo wg-quick strip wg0)", shell=True, check=True)
+
+        # Setup NAT rule: Shadow IP -> Primary IP
+        # This ensures the rest of the network sees the client as primary_ip
+        nat_cmd = f"sudo nft add rule ip nat POSTROUTING ip saddr {shadow_ip} snat to {primary_ip}"
+        subprocess.run(nat_cmd, shell=True, check=True)
 
         save_peer_state(peer_state)
 
+        # Schedule cleanup after grace period
+        background_tasks.add_task(cleanup_shadow_peer, peer_id_internal, shadow_ip, primary_ip)
+
         return {
             "status": "success",
-            "message": "Key rotated successfully. Grace period of 5 minutes active for old key."
+            "message": "Key rotated with zero downtime. Dual-peer overlap active."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

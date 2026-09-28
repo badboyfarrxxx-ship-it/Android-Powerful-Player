@@ -38,7 +38,7 @@ private:
 
     std::string serverDomain_;
     std::string serverPublicKey_;
-    std::string clientPrivateKey_;
-    std::string clientPublicKey_;
+    SecureKey clientPrivateKey_;
+    SecureKey clientPublicKey_;
     std::string assignedIp_;
 };

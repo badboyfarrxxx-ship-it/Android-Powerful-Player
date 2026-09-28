@@ -1,0 +1,70 @@
+# Security & Stealth Hardening Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Implement traffic obfuscation, MFA onboarding, and session key rotation to make the VPN stealthy and impenetrable.
+
+**Architecture:** An XOR-masking layer added to the network stack and a challenge-response verification system in the onboarding API.
+
+**Tech Stack:** C++ (Native Core), Python (FastAPI), Kotlin (Android), C++ (Windows).
+
+**Spec:** docs/superpowers/specs/2026-09-29-home-vpn-v2-design.md
+
+## Global Constraints
+- **Performance**: XOR masking must add <1ms of latency.
+- **Stealth**: Masked packets must not have static signatures detectable by DPI.
+- **Security**: MFA codes must expire after 10 minutes.
+- **Compatibility**: Must maintain backward compatibility with V1.0 clients until they are updated.
+
+## Review Focus
+- **Entropy**: Verify that the XOR mask is sufficiently random and rotates frequently.
+- **MFA Bypass**: Ensure that a device cannot skip the verification step during registration.
+- **Key Leakage**: Verify that temporary session keys are zeroed from memory after rotation.
+- **Latency**: Measure the impact of the obfuscation layer on round-trip time.
+
+---
+
+### Task 1: XOR Masking Layer (Native)
+
+**Files:**
+- Modify: `jni/vpn/WireGuardCore.cpp`
+- Modify: `windows/service/NetworkManager.cpp`
+
+- [ ] **Step 1: Implement XOR Stream Generator**
+  Create a function that generates a pseudo-random byte stream based on a shared seed and packet counter.
+- [ ] **Step 2: Implement Masking/Unmasking**
+  Add `mask_packet()` and `unmask_packet()` functions that XOR the WireGuard payload.
+- [ ] **Step 3: Integrate into Packet Loop**
+  Insert the masking call immediately before UDP send and immediately after UDP receive.
+- [ ] **Step 4: Implement Key Rotation**
+  Ensure the seed rotates every 100 packets to prevent pattern analysis.
+
+### Task 2: MFA Onboarding Flow (Server & Client)
+
+**Files:**
+- Modify: `server/onboarding/main.py`
+- Modify: `app/src/main/java/com/vpn/network/VpnNetworkClient.java`
+- Modify: `windows/service/VpnService.cpp`
+
+- [ ] **Step 1: Implement "Pending" Peer State**
+  Update the Pi API to store new registrations as `PENDING` rather than `ACTIVE`.
+- [ ] **Step 2: Implement Code Generation & Delivery**
+  Create a utility to generate a 6-digit code and send it via an external API (Email/SMS).
+- [ ] **Step 3: Implement `/verify` Endpoint**
+  Create an API endpoint that accepts the code and promotes the peer to `ACTIVE`.
+- [ ] **Step 4: Update Client UI/Logic**
+  Add a verification screen to the Android/Windows apps to collect and send the code.
+
+### Task 3: Auto-Key Rotation (Session Keys)
+
+**Files:**
+- Modify: `jni/vpn/WireGuardCore.cpp`
+- Modify: `app/src/main/java/com/vpn/HomeVpnService.java`
+- Modify: `windows/service/VpnService.cpp`
+
+- [ ] **Step 1: Implement New Key Generation**
+  Add logic to generate temporary session keys on the client.
+- [ ] **Step 2: Implement Sync Protocol**
+  Create a special "Control Packet" that sends the new public key to the Pi through the existing tunnel.
+- [ ] **Step 3: Implement Grace Period**
+  Configure the Pi to accept both old and new keys for 5 minutes to prevent drops.
