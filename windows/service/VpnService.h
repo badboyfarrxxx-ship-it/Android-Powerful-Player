@@ -4,6 +4,15 @@
 #include <thread>
 #include "NetworkManager.h"
 #include "../common/ConfigManager.h"
+#include <vector>
+
+enum class VpnState {
+    DISCONNECTED,
+    REGISTERING,
+    PENDING_VERIFICATION,
+    ACTIVE,
+    ERROR
+};
 
 class VpnService {
 public:
@@ -16,15 +25,17 @@ public:
 
     // Onboarding
     bool RegisterDevice(const std::string& domain, const std::string& deviceName);
+    bool VerifyDevice(const std::string& code);
 
 private:
     void ServiceLoop();
     bool PerformHandshake();
 
     std::atomic<bool> isRunning_;
+    std::atomic<VpnState> currentState_;
     std::thread workerThread_;
     NetworkManager networkManager_;
-    
+
     std::string serverDomain_;
     std::string serverPublicKey_;
     std::string clientPrivateKey_;

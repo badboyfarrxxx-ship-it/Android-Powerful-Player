@@ -9,8 +9,14 @@
 extern "C" {
 #endif
 
-/**
- * Encrypts a packet using ChaCha20-Poly1305.
+// --- Key Generation ---
+void generate_x25519_keypair(uint8_t *pub_key, uint8_t *priv_key);
+
+// --- Stealth Masking ---
+void apply_stealth_mask(uint8_t *data, size_t len, uint64_t seed, uint64_t counter);
+
+// --- JNI Wrapper for Java/Android ---
+JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_encryptPacket(
  *
  * @param env JNI environment.
  * @param clazz The calling class.

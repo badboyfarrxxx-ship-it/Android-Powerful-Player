@@ -27,6 +27,7 @@ public:
 
     // DNS Configuration
     bool setSystemDns(const std::string& dnsIp);
+    bool sendPacket(const std::vector<uint8_t>& packet);
 
 private:
     bool executeCommand(const std::string& cmd);

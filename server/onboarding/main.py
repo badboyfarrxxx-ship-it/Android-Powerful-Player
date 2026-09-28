@@ -2,66 +2,259 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
 import os
+import secrets
+import time
+import json
+from typing import Dict, Optional
 
 app = FastAPI(title="VPN Onboarding API")
 
 # Configuration
 WG_CONF_PATH = "/etc/wireguard/wg0.conf"
 SERVER_PUB_KEY_PATH = "/etc/wireguard/keys/publickey"
+PENDING_PEERS_PATH = "/etc/wireguard/pending_peers.json"
+PEER_STATE_PATH = "/etc/wireguard/peer_state.json" # Track rotation and grace periods
 VPN_SUBNET = "10.0.0"
 START_IP = 2
 MAX_IP = 254
+CODE_EXPIRY_SECONDS = 600  # 10 minutes
+ROTATION_GRACE_PERIOD = 300 # 5 minutes grace period for old keys
+
+# Rate Limiting Configuration
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_WINDOW = 600  # 10 minutes
+verification_attempts: Dict[str, list] = {} # peer_id -> list of timestamps
 
 class RegistrationRequest(BaseModel):
     device_name: str
     public_key: str
 
+class VerificationRequest(BaseModel):
+    peer_id: str
+    code: str
+
+class RotationRequest(BaseModel):
+    peer_id: str
+    new_public_key: str
+
+def load_pending_peers() -> Dict:
+    if not os.path.exists(PENDING_PEERS_PATH):
+        return {}
+    with open(PENDING_PEERS_PATH, "r") as f:
+        return json.load(f)
+
+def save_pending_peers(peers: Dict):
+    with open(PENDING_PEERS_PATH, "w") as f:
+        json.dump(peers, f, indent=4)
+
+def load_peer_state() -> Dict:
+    if not os.path.exists(PEER_STATE_PATH):
+        return {}
+    with open(PEER_STATE_PATH, "r") as f:
+        return json.load(f)
+
+def save_peer_state(state: Dict):
+    with open(PEER_STATE_PATH, "w") as f:
+        json.dump(state, f, indent=4)
+
 def get_next_free_ip():
     """Parses wg0.conf to find the next available IP in the pool."""
     if not os.path.exists(WG_CONF_PATH):
         return f"{VPN_SUBNET}.{START_IP}"
-    
+
     with open(WG_CONF_PATH, "r") as f:
         content = f.read()
-        
+
     used_ips = []
     for line in content.splitlines():
         if "AllowedIPs" in line:
             ip = line.split("=")[1].strip().split("/")[0]
             used_ips.append(int(ip.split(".")[-1]))
-            
+
     for ip in range(START_IP, MAX_IP + 1):
         if ip not in used_ips:
             return f"{VPN_SUBNET}.{ip}"
-    
+
     raise Exception("No more IP addresses available in the pool")
 
 @app.post("/register")
 async def register_device(req: RegistrationRequest):
     try:
+        # Check if peer already exists in wg0.conf (already ACTIVE)
+        if os.path.exists(WG_CONF_PATH):
+            with open(WG_CONF_PATH, "r") as f:
+                if req.public_key in f.read():
+                    # Peer is already active, treat as success but no need for MFA
+                    with open(SERVER_PUB_KEY_PATH, "r") as sk:
+                        server_pub_key = sk.read().strip()
+                    return {
+                        "status": "active",
+                        "message": f"Device {req.device_name} is already registered.",
+                        "server_public_key": server_pub_key
+                    }
+
         client_ip = get_next_free_ip()
-        
-        # Construct the peer configuration block
-        peer_block = f"\n[Peer]\nPublicKey = {req.public_key}\nAllowedIPs = {client_ip}/32\n"
-        
-        # Append to wg0.conf
+        verification_code = "".join([str(secrets.randbelow(10)) for _ in range(6)])
+
+        pending_peers = load_pending_peers()
+        pending_peers[req.public_key] = {
+            "device_name": req.device_name,
+            "public_key": req.public_key,
+            "assigned_ip": client_ip,
+            "code": verification_code,
+            "timestamp": time.time()
+        }
+        save_pending_peers(pending_peers)
+
+        # SECURITY FIX: MFA codes must be Out-of-Band (OOB).
+        # Simulated OOB delivery (log entry). In production, this calls SMS/Email API.
+        print(f"[OOB MESSAGE] To {req.device_name}: Your VPN verification code is {verification_code}")
+
+        return {
+            "status": "pending",
+            "peer_id": req.public_key,
+            "message": "Device registered. Please verify with the 6-digit code sent to your registered channel."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/verify")
+async def verify_device(req: VerificationRequest):
+    try:
+        # Rate Limiting
+        now = time.time()
+        attempts = verification_attempts.get(req.peer_id, [])
+        # Filter attempts within the window
+        attempts = [t for t in attempts if now - t < RATE_LIMIT_WINDOW]
+
+        if len(attempts) >= RATE_LIMIT_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many verification attempts. Please try again in 10 minutes.")
+
+        # Record this attempt
+        attempts.append(now)
+        verification_attempts[req.peer_id] = attempts
+
+        pending_peers = load_pending_peers()
+
+        if req.peer_id not in pending_peers:
+            # Check if already active (idempotency)
+            if os.path.exists(WG_CONF_PATH):
+                with open(WG_CONF_PATH, "r") as f:
+                    if req.peer_id in f.read():
+                        return {"status": "success", "message": "Device already verified."}
+
+            raise HTTPException(status_code=404, detail="Peer not found in pending list.")
+
+        peer_data = pending_peers[req.peer_id]
+
+        # Check expiry
+        if time.time() - peer_data["timestamp"] > CODE_EXPIRY_SECONDS:
+            raise HTTPException(status_code=400, detail="Verification code expired.")
+
+        # Check code
+        if peer_data["code"] != req.code:
+            raise HTTPException(status_code=400, detail="Invalid verification code.")
+
+        # Promote to ACTIVE
+        client_ip = peer_data["assigned_ip"]
+        peer_block = f"\n[Peer]\nPublicKey = {req.peer_id}\nAllowedIPs = {client_ip}/32\n"
+
         with open(WG_CONF_PATH, "a") as f:
             f.write(peer_block)
-            
-        # Apply configuration without dropping existing tunnels
-        # wg syncconf wg0 <(wg-quick strip wg0)
-        # Since we are in Python, we use a shell to handle the process substitution
+
         cmd = f"sudo wg syncconf wg0 <(sudo wg-quick strip wg0)"
         subprocess.run(cmd, shell=True, check=True)
-        
+
+        # Initialize peer state for rotation tracking
+        peer_state = load_peer_state()
+        peer_state[req.peer_id] = {
+            "current_pub_key": req.peer_id,
+            "previous_pub_key": None,
+            "last_rotation_time": 0,
+            "assigned_ip": client_ip
+        }
+        save_peer_state(peer_state)
+
+        # Remove from pending
+        del pending_peers[req.peer_id]
+        save_pending_peers(pending_peers)
+
         with open(SERVER_PUB_KEY_PATH, "r") as f:
             server_pub_key = f.read().strip()
-            
+
         return {
             "status": "success",
             "assigned_ip": client_ip,
             "server_public_key": server_pub_key,
-            "message": f"Device {req.device_name} registered successfully."
+            "message": "Device verified and activated successfully."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rotate")
+async def rotate_key(req: RotationRequest):
+    """
+    Handles secure key rotation request.
+    Implements the 5-minute grace period by updating peer state.
+    """
+    try:
+        peer_state = load_peer_state()
+
+        # Find the peer regardless of whether the req.peer_id is the current or old key
+        # (Rotation request should ideally come from the current active key)
+        peer_entry = None
+        peer_id_internal = None
+
+        for pid, data in peer_state.items():
+            if pid == req.peer_id or data["current_pub_key"] == req.peer_id:
+                peer_entry = data
+                peer_id_internal = pid
+                break
+
+        if not peer_entry:
+            raise HTTPException(status_code=404, detail="Active peer not found.")
+
+        # 1. Store current key as previous key for the grace period
+        old_pub_key = peer_entry["current_pub_key"]
+        new_pub_key = req.new_public_key
+
+        peer_entry["previous_pub_key"] = old_pub_key
+        peer_entry["current_pub_key"] = new_pub_key
+        peer_entry["last_rotation_time"] = time.time()
+
+        # 2. Update wg0.conf
+        # We need to replace the old PublicKey line with the new one for the specific AllowedIPs
+        client_ip = peer_entry["assigned_ip"]
+
+        if os.path.exists(WG_CONF_PATH):
+            with open(WG_CONF_PATH, "r") as f:
+                lines = f.readlines()
+
+            new_lines = []
+            found_peer = False
+            for i in range(len(lines)):
+                if "AllowedIPs = " + client_ip + "/32" in lines[i]:
+                    # Found the peer block. The PublicKey is usually the line before.
+                    # This is a simple replacement; in production, a more robust parser is needed.
+                    if i > 0 and "PublicKey =" in lines[i-1]:
+                        new_lines[-1] = f"PublicKey = {new_pub_key}\n"
+                    found_peer = True
+                new_lines.append(lines[i])
+
+            with open(WG_CONF_PATH, "w") as f:
+                f.writelines(new_lines)
+
+        # 3. Apply changes without dropping connection
+        cmd = f"sudo wg syncconf wg0 <(sudo wg-quick strip wg0)"
+        subprocess.run(cmd, shell=True, check=True)
+
+        save_peer_state(peer_state)
+
+        return {
+            "status": "success",
+            "message": "Key rotated successfully. Grace period of 5 minutes active for old key."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

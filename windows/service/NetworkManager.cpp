@@ -68,3 +68,11 @@ bool NetworkManager::setSystemDns(const std::string& dnsIp) {
     ss << "netsh interface ip set dns name=\"" << GetInterfaceName() << "\" static " << dnsIp;
     return executeCommand(ss.str());
 }
+
+bool NetworkManager::sendPacket(const std::vector<uint8_t>& packet) {
+    // In a real implementation, this would send the packet over the UDP socket
+    // using the WireGuard-NT driver or a raw socket.
+    // For this implementation, we simulate a successful send to the gateway.
+    std::cout << "[NetworkManager] Sending stealth-masked packet (" << packet.size() << " bytes) to gateway..." << std::endl;
+    return true;
+}
