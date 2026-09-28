@@ -1,0 +1,232 @@
+# Android Powerful Media Player Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build a high-performance, local-only Android media player using a hybrid ExoPlayer and FFmpeg engine.
+
+**Architecture:** A layered Android app using Jetpack Compose for the UI, ExoPlayer for playback orchestration, and a custom C++/JNI bridge to FFmpeg for software decoding of unsupported formats.
+
+**Tech Stack:** Kotlin, Jetpack Compose, ExoPlayer, FFmpeg (C++), JNI, Room SQLite, Android NDK.
+
+**Spec:** `docs/superpowers/specs/2026-09-29-android-media-player-design.md`
+
+## Global Constraints
+- **Target Platform:** Android (API 21+).
+- **Storage:** Must use Scoped Storage / MediaStore API for Android 11+ compatibility.
+- **Memory:** C++ memory must be explicitly managed; no leaks in JNI buffers.
+- **UI:** Responsive gesture-based overlay for volume, brightness, and seeking.
+- **Audio:** High-fidelity 5-band EQ and loudness normalization.
+
+## Review Focus
+- **JNI Memory Leak:** Ensure every `GlobalRef` and native buffer is explicitly freed. Test: 2-hour playback loop with memory profiling.
+- **Scoped Storage Race:** Ensure URI persistable permissions are handled before accessing files. Test: Reboot device and attempt to play a previously indexed file.
+- **Audio Focus Loss:** Handle `AUDIOFOCUS_LOSS` by pausing and resuming correctly. Test: Trigger an incoming phone call during playback.
+- **AV Sync Drift:** Ensure video frames are synchronized to the audio clock. Test: Play 4K video at 1.5x speed for 30 mins.
+- **Corrupt File Handling:** Gracefully handle malformed headers without hanging. Test: Play a renamed `.txt` file as `.mp4`.
+
+---
+
+## File Map
+
+### UI Layer
+- `ui/screens/PlayerScreen.kt` - Main playback UI.
+- `ui/components/GestureOverlay.kt` - Swipe detection layer.
+- `ui/components/EqualizerView.kt` - EQ controls.
+- `ui/screens/LibraryScreen.kt` - File browser.
+- `ui/screens/PlaylistScreen.kt` - Queue management.
+
+### Controller Layer
+- `player/PowerfulPlayer.kt` - ExoPlayer wrapper.
+- `player/PlayerViewModel.kt` - UDF state management.
+- `player/renderers/CustomRenderersFactory.kt` - Rendering logic switch.
+- `player/renderers/FFmpegVideoRenderer.kt` - Native video fallback.
+- `player/renderers/FFmpegAudioRenderer.kt` - Native audio fallback.
+
+### Native Engine (C++/JNI)
+- `jni/FFmpegBridge.cpp` - JNI entry points.
+- `jni/native/DecoderCore.cpp` - FFmpeg AVCodec wrapper.
+- `jni/native/RingBuffer.cpp` - Decoded frame storage.
+- `jni/native/AudioProcessor.cpp` - PCM normalization.
+- `jni/CMakeLists.txt` - Native build config.
+
+### Data Layer
+- `data/local/MediaDatabase.kt` - Room DB.
+- `data/local/MediaEntity.kt` - Media metadata entity.
+- `data/local/MediaDao.kt` - DB queries.
+- `data/repository/MediaRepository.kt` - Disk scanner and DB coordinator.
+
+---
+
+## Implementation Tasks
+
+### Task 1: Local Media Infrastructure
+**Files:**
+- Create: `data/local/MediaEntity.kt`, `data/local/MediaDatabase.kt`, `data/local/MediaDao.kt`, `data/repository/MediaRepository.kt`
+- Test: `tests/data/MediaRepositoryTest.kt`
+
+**Interfaces:**
+- Produces: `MediaRepository.getMediaFiles(): Flow<List<MediaEntity>>`
+
+- [ ] **Step 1: Implement Room Entity and DAO**
+  Define `MediaEntity` (path, title, duration) and `MediaDao` with `@Query` for file search.
+- [ ] **Step 2: Implement MediaRepository scanner**
+  Use `MediaStore` API to query local files. Implement `persistableUriPermission` logic for Android 11+.
+- [ ] **Step 3: Write failing test for file discovery**
+  ```kotlin
+  @Test fun testFileDiscovery() {
+      val files = repository.scan().first()
+      assert(files.isNotEmpty())
+  }
+  ```
+- [ ] **Step 4: Verify scan results in mock directory**
+- [ ] **Step 5: Commit**
+
+### Task 2: Player State & UDF
+**Files:**
+- Create: `player/PlayerViewModel.kt`, `player/PlayerState.kt`
+- Test: `tests/player/PlayerViewModelTest.kt`
+
+**Interfaces:**
+- Consumes: `MediaRepository`
+- Produces: `StateFlow<PlayerState>`
+
+- [ ] **Step 1: Define PlayerState**
+  Create data class with `isPlaying`, `currentPosition`, `duration`, and `currentTrack`.
+- [ ] **Step 2: Implement ViewModel state transitions**
+  Implement `play()`, `pause()`, and `seekTo(pos)`.
+- [ ] **Step 3: Write failing test for state transition**
+  ```kotlin
+  @Test fun testPlayPauseTransition() {
+      viewModel.play()
+      assert(viewModel.state.value.isPlaying)
+  }
+  ```
+- [ ] **Step 4: Verify transitions with JUnit**
+- [ ] **Step 5: Commit**
+
+### Task 3: Basic ExoPlayer Integration
+**Files:**
+- Create: `player/PowerfulPlayer.kt`
+- Test: `tests/player/PlaybackTest.kt`
+
+**Interfaces:**
+- Consumes: `PlayerViewModel`
+- Produces: Playback audio/video output
+
+- [ ] **Step 1: Initialize SimpleExoPlayer**
+  Set up the player instance and attach to a `SurfaceView`.
+- [ ] **Step 2: Implement standard file playback**
+  Pass a local URI to ExoPlayer and verify it plays.
+- [ ] **Step 3: Write failing test for standard playback**
+  Verify `player.playbackState == STATE_READY`.
+- [ ] **Step 4: Verify with a standard .mp3 file**
+- [ ] **Step 5: Commit**
+
+### Task 4: The Native JNI Bridge
+**Files:**
+- Create: `jni/FFmpegBridge.cpp`, `jni/CMakeLists.txt`
+- Test: `tests/native/JniPingTest.kt`
+
+**Interfaces:**
+- Produces: Native methods for `decodePacket()` and `releaseBuffer()`.
+
+- [ ] **Step 1: Setup CMake and NDK**
+  Configure `CMakeLists.txt` to link FFmpeg shared libraries.
+- [ ] **Step 2: Implement JNI "Ping" method**
+  Create a simple `native int ping()` method in `FFmpegBridge.cpp`.
+- [ ] **Step 3: Write failing test for JNI connection**
+  ```kotlin
+  @Test fun testJniPing() {
+      assert(FFmpegBridge.ping() == 1)
+  }
+  ```
+- [ ] **Step 4: Verify native method returns 1**
+- [ ] **Step 5: Commit**
+
+### Task 5: Native Ring-Buffer & Decoder Core
+**Files:**
+- Create: `jni/native/RingBuffer.cpp`, `jni/native/DecoderCore.cpp`
+- Test: `tests/native/DecoderTest.cpp`
+
+**Interfaces:**
+- Consumes: Raw packets from JNI.
+- Produces: Decoded YUV/PCM buffers.
+
+- [ ] **Step 1: Implement thread-safe RingBuffer**
+  Create a circular buffer in C++ for decoded frames.
+- [ ] **Step 2: Implement FFmpeg AVCodec wrapper**
+  Create `DecoderCore` to handle `avcodec_send_packet` and `avcodec_receive_frame`.
+- [ ] **Step 3: Write C++ test for frame decoding**
+  Feed a raw byte array and verify a valid `AVFrame` is produced.
+- [ ] **Step 4: Verify memory ownership (no leaks)**
+  Run with Valgrind or ASAN to ensure `av_frame_free` is called.
+- [ ] **Step 5: Commit**
+
+### Task 6: Custom Renderers Factory (The Hybrid Switch)
+**Files:**
+- Create: `player/renderers/CustomRenderersFactory.kt`, `player/renderers/FFmpegVideoRenderer.kt`
+- Test: `tests/player/RendererSwitchTest.kt`
+
+**Interfaces:**
+- Consumes: `FFmpegBridge`
+- Produces: `RenderersFactory` instance for ExoPlayer.
+
+- [ ] **Step 1: Implement RenderersFactory logic**
+  Override `buildVideoRenderers` to check for supported MIME types.
+- [ ] **Step 2: Implement FFmpegVideoRenderer**
+  Create a renderer that pushes data to `FFmpegBridge` instead of `MediaCodec`.
+- [ ] **Step 3: Write failing test for renderer selection**
+  Verify `FFmpegVideoRenderer` is returned for an unsupported `.mkv` format.
+- [ ] **Step 4: Verify fallback triggers on unsupported file**
+- [ ] **Step 5: Commit**
+
+### Task 7: Gesture Engine Overlay
+**Files:**
+- Create: `ui/components/GestureOverlay.kt`
+- Test: `tests/ui/GestureTest.kt`
+
+**Interfaces:**
+- Consumes: `PlayerViewModel`
+- Produces: Volume/Brightness/Seek events.
+
+- [ ] **Step 1: Implement Compose PointerInput for swipes**
+  Detect vertical swipes on left/right halves of the screen.
+- [ ] **Step 2: Connect swipes to AudioManager/WindowManager**
+  Map swipe delta to volume/brightness increments.
+- [ ] **Step 3: Write failing test for swipe detection**
+  Simulate a swipe and verify `AudioManager.setStreamVolume` was called.
+- [ ] **Step 4: Verify gesture latency is < 100ms**
+- [ ] **Step 5: Commit**
+
+### Task 8: Audio Processing Chain
+**Files:**
+- Create: `jni/native/AudioProcessor.cpp`, `ui/components/EqualizerView.kt`
+- Test: `tests/audio/EqTest.kt`
+
+**Interfaces:**
+- Consumes: ExoPlayer `AudioSink`.
+- Produces: Processed PCM audio.
+
+- [ ] **Step 1: Implement 5-band EQ UI**
+  Create a slider-based interface in Compose.
+- [ ] **Step 2: Link UI to Android Equalizer API**
+  Apply gain changes to the active audio session.
+- [ ] **Step 3: Implement native PCM normalization**
+  Use `AudioProcessor.cpp` to normalize peak amplitudes in the native layer.
+- [ ] **Step 4: Verify audio normalization via waveform analysis**
+- [ ] **Step 5: Commit**
+
+### Task 9: Final Validation & Stress Test
+**Files:**
+- Modify: All files.
+- Test: `tests/integration/StressTest.kt`
+
+- [ ] **Step 1: Implement Audio Focus listener**
+  Handle `AUDIOFOCUS_LOSS` by pausing playback.
+- [ ] **Step 2: Perform 2-hour memory leak soak test**
+  Play high-bitrate files and monitor heap usage in Android Studio Profiler.
+- [ ] **Step 3: Verify AV Sync at 1.5x speed**
+  Check for lip-sync drift over a 30-minute session.
+- [ ] **Step 4: Run corrupted file "Evil" test**
+  Verify the app doesn't crash when playing malformed media.
+- [ ] **Step 5: Final Commit and Tag v1.0.0**
