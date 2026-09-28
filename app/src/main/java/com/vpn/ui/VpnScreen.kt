@@ -48,8 +48,8 @@ fun VpnScreen(vpnViewModel: VpnViewModel = viewModel()) {
             ) {
                 MetricRow("Status", state.state.name, state.state == VpnViewModel.ConnectionState.CONNECTED)
                 MetricRow("VPN IP", state.currentIp, true)
-                MetricRow("Upload", state.uploadSpeed + " KB/s", true)
-                MetricRow("Download", state.downloadSpeed + " KB/s", true)
+                MetricRow("Upload", "${state.uploadSpeed} KB/s", true)
+                MetricRow("Download", "${state.downloadSpeed} KB/s", true)
             }
         }
 
