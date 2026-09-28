@@ -25,10 +25,10 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build Media Player APK
-      run: ./gradlew :app:assembleDebug
+      run: ./gradlew :app:assembleDebug --no-daemon
 
     - name: Build VPN APK
-      run: ./gradlew :vpn:assembleDebug
+      run: ./gradlew :vpn:assembleDebug --no-daemon
 
     - name: Upload APKs
       uses: actions/upload-artifact@v4
