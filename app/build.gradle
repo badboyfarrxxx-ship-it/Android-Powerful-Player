@@ -27,6 +27,14 @@ android {
             path "src/main/cpp/CMakeLists.txt"
         }
     }
+
+    buildFeatures {
+        compose true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion '1.5.8'
+    }
 }
 
 dependencies {
