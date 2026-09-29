@@ -84,7 +84,7 @@ public class HomeVpnService extends VpnService {
 
         try {
             vpnInterface = builder.establish();
-            tunChannel = java.nio.channels.Channels.newChannel(vpnInterface.getFileDescriptor());
+            tunChannel = new java.io.FileOutputStream(vpnInterface.getFileDescriptor()).getChannel();
 
             udpChannel = DatagramChannel.open();
             udpChannel.configureBlocking(true);
@@ -211,9 +211,10 @@ public class HomeVpnService extends VpnService {
 
             while (isRunning) {
                 ciphertextBuffer.clear();
-                int read = udpChannel.receive(ciphertextBuffer);
-                if (read == -1) break;
+                java.net.SocketAddress remoteSender = udpChannel.receive(ciphertextBuffer);
+                if (remoteSender == null) break;
                 ciphertextBuffer.flip();
+                int read = ciphertextBuffer.remaining();
 
                 // Unmask packet immediately after UDP receive
                 nativeCore.unmaskPacket(ciphertextBuffer, 0, ciphertextBuffer.remaining(), maskingSeed, rxCounter++);
