@@ -75,6 +75,11 @@ static unsigned char* get_safe_buffer(JNIEnv *env, jobject buffer, jint pos, jin
 JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_generateSessionKeyPair(
     JNIEnv *env, jobject obj, jobject pub_key_buf, jobject priv_key_buf) {
 
+    unsigned char *pub_key = get_safe_buffer(env, pub_key_buf, 0, KEY_SIZE, nullptr);
+    unsigned char *priv_key = get_safe_buffer(env, priv_key_buf, 0, KEY_SIZE, nullptr);
+
+    if (!pub_key || !priv_key) return -1;
+
     EVP_PKEY *pkey = nullptr;
     EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr);
     if (!pctx) return -2;
@@ -143,26 +148,6 @@ static int secure_memcmp(const unsigned char *a, const unsigned char *b, size_t 
 /**
  * Helper to safely extract a direct buffer address and validate its capacity.
  */
-static unsigned char* get_safe_buffer(JNIEnv *env, jobject buffer, jint pos, jint required_len, jint *out_actual_len) {
-    if (buffer == nullptr) return nullptr;
-
-    unsigned char* addr = (unsigned char*)env->GetDirectBufferAddress(buffer);
-    jlong capacity = env->GetDirectBufferCapacity(buffer);
-
-    if (addr == nullptr) return nullptr;
-
-    // Check for buffer overflow: pos + required_len must be within capacity
-    if ((jlong)pos + required_len > capacity) {
-        return nullptr;
-    }
-
-    if (out_actual_len) {
-        *out_actual_len = (jint)capacity;
-    }
-
-    return addr + pos;
-}
-
 JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_encryptPacket(
     JNIEnv *env, jobject obj,
     jobject plaintext_buf, jint plaintext_pos, jint plaintext_len,
@@ -248,7 +233,7 @@ JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_decryptPacket(
     int plaintext_out_len;
 
     // Initialize ChaCha20-Poly1305
-    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce) != 1) {
+    if ((int)EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return -3;
     }
