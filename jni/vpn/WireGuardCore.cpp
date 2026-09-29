@@ -233,7 +233,7 @@ JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_decryptPacket(
     int plaintext_out_len;
 
     // Initialize ChaCha20-Poly1305
-    if ((int)EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce) == nullptr) {
         EVP_CIPHER_CTX_free(ctx);
         return -3;
     }
