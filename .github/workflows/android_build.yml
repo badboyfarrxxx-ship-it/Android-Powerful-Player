@@ -33,7 +33,7 @@ jobs:
       run: ./gradlew :app:assembleDebug --no-daemon
 
     - name: Build VPN APK
-      run: ./gradlew :vpn:assembleDebug --no-daemon
+      run: ./gradlew :app:assembleDebug --no-daemon
 
     - name: Upload APKs
       uses: actions/upload-artifact@v4
@@ -41,4 +41,3 @@ jobs:
         name: android-apks
         path: |
           app/build/outputs/apk/debug/*.apk
-          vpn/build/outputs/apk/debug/*.apk
