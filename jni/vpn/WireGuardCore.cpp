@@ -49,6 +49,29 @@ void apply_stealth_mask(uint8_t *data, size_t len, uint64_t seed, uint64_t count
  * Generates a new X25519 key pair for session rotation.
  * returns 0 on success, negative on failure.
  */
+/**
+ * Helper to safely extract a direct buffer address and validate its capacity.
+ */
+static unsigned char* get_safe_buffer(JNIEnv *env, jobject buffer, jint pos, jint required_len, jint *out_actual_len) {
+    if (buffer == nullptr) return nullptr;
+
+    unsigned char* addr = (unsigned char*)env->GetDirectBufferAddress(buffer);
+    jlong capacity = env->GetDirectBufferCapacity(buffer);
+
+    if (addr == nullptr) return nullptr;
+
+    // Check for buffer overflow: pos + required_len must be within capacity
+    if ((jlong)pos + required_len > capacity) {
+        return nullptr;
+    }
+
+    if (out_actual_len) {
+        *out_actual_len = (jint)capacity;
+    }
+
+    return addr + pos;
+}
+
 JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_generateSessionKeyPair(
     JNIEnv *env, jobject obj, jobject pub_key_buf, jobject priv_key_buf) {
 
@@ -125,26 +148,6 @@ static int secure_memcmp(const unsigned char *a, const unsigned char *b, size_t 
 /**
  * Helper to safely extract a direct buffer address and validate its capacity.
  */
-static unsigned char* get_safe_buffer(JNIEnv *env, jobject buffer, jint pos, jint required_len, jint *out_actual_len) {
-    if (buffer == nullptr) return nullptr;
-
-    unsigned char* addr = (unsigned char*)env->GetDirectBufferAddress(buffer);
-    jlong capacity = env->GetDirectBufferCapacity(buffer);
-
-    if (addr == nullptr) return nullptr;
-
-    // Check for buffer overflow: pos + required_len must be within capacity
-    if ((jlong)pos + required_len > capacity) {
-        return nullptr;
-    }
-
-    if (out_actual_len) {
-        *out_actual_len = (jint)capacity;
-    }
-
-    return addr + pos;
-}
-
 JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_encryptPacket(
     JNIEnv *env, jobject obj,
     jobject plaintext_buf, jint plaintext_pos, jint plaintext_len,
@@ -200,33 +203,6 @@ JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_encryptPacket(
     return 0;
 }
 
-/**
- * XOR Masking for outgoing packets.
- * Integrated into the transmission pipeline to hide WireGuard headers.
- */
-JNIEXPORT void JNICALL Java_com_vpn_NativeEncryptionCore_maskPacket(
-    JNIEnv *env, jobject obj, jobject packet_buf, jint pos, jint len, jlong seed, jlong counter) {
-
-    unsigned char *data = get_safe_buffer(env, packet_buf, pos, len, nullptr);
-    if (!data) return;
-
-    MaskState state = { (uint64_t)seed, (uint64_t)counter };
-    apply_xor_mask(data, len, &state);
-}
-
-/**
- * XOR Unmasking for incoming packets.
- */
-JNIEXPORT void JNICALL Java_com_vpn_NativeEncryptionCore_unmaskPacket(
-    JNIEnv *env, jobject obj, jobject packet_buf, jint pos, jint len, jlong seed, jlong counter) {
-
-    unsigned char *data = get_safe_buffer(env, packet_buf, pos, len, nullptr);
-    if (!data) return;
-
-    MaskState state = { (uint64_t)seed, (uint64_t)counter };
-    apply_xor_mask(data, len, &state);
-}
-
 JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_decryptPacket(
     JNIEnv *env, jobject obj,
     jobject ciphertext_buf, jint ciphertext_pos, jint ciphertext_len,
@@ -257,7 +233,7 @@ JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_decryptPacket(
     int plaintext_out_len;
 
     // Initialize ChaCha20-Poly1305
-    if (1 != EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce)) {
+    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, key, nonce) == nullptr) {
         EVP_CIPHER_CTX_free(ctx);
         return -3;
     }
@@ -287,31 +263,4 @@ JNIEXPORT jint JNICALL Java_com_vpn_NativeEncryptionCore_decryptPacket(
 
     EVP_CIPHER_CTX_free(ctx);
     return 0;
-}
-
-/**
- * XOR Masking for outgoing packets.
- * Integrated into the transmission pipeline to hide WireGuard headers.
- */
-JNIEXPORT void JNICALL Java_com_vpn_NativeEncryptionCore_maskPacket(
-    JNIEnv *env, jobject obj, jobject packet_buf, jint pos, jint len, jlong seed, jlong counter) {
-
-    unsigned char *data = get_safe_buffer(env, packet_buf, pos, len, nullptr);
-    if (!data) return;
-
-    MaskState state = { (uint64_t)seed, (uint64_t)counter };
-    apply_xor_mask(data, len, &state);
-}
-
-/**
- * XOR Unmasking for incoming packets.
- */
-JNIEXPORT void JNICALL Java_com_vpn_NativeEncryptionCore_unmaskPacket(
-    JNIEnv *env, jobject obj, jobject packet_buf, jint pos, jint len, jlong seed, jlong counter) {
-
-    unsigned char *data = get_safe_buffer(env, packet_buf, pos, len, nullptr);
-    if (!data) return;
-
-    MaskState state = { (uint64_t)seed, (uint64_t)counter };
-    apply_xor_mask(data, len, &state);
 }
