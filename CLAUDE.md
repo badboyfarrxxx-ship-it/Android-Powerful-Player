@@ -234,16 +234,25 @@ Additional docs in `docs/user-guide/`, `docs/developer-guide/`, `docs/reference/
 
 ## 💡 Core Development Principles
 
-### 1. Evidence-Based Development
+### 1. Think Before Coding
+**Analyze first, execute second.** Never start writing code without a verified plan. Use the Confidence-First pattern: ≥90% proceed, 70-89% present alternatives, <70% ask questions.
+
+### 2. Simplicity First
+**Avoid over-engineering.** Prefer the simplest solution that solves the problem correctly and maintainably. Resist the urge to add "future-proofing" that adds complexity without immediate value.
+
+### 3. Surgical Changes
+**Minimize the blast radius.** Make precise, targeted modifications. Avoid large-scale refactors or "cleaning up" unrelated code during a feature implementation or bug fix.
+
+### 4. Goal-Driven Execution
+**Focus on the outcome.** Every change must directly contribute to the defined goal. Avoid "gold-plating" and distractions that don't move the needle on the current task.
+
+### 5. Evidence-Based Development
 **Never guess** - verify with official docs (Context7 MCP, WebFetch, WebSearch) before implementation.
 
-### 2. Confidence-First Implementation
-Check confidence BEFORE starting: ≥90% proceed, 70-89% present alternatives, <70% ask questions.
-
-### 3. Parallel-First Execution
+### 6. Parallel-First Execution
 Use **Wave → Checkpoint → Wave** pattern (3.5x faster). Example: `[Read files in parallel]` → Analyze → `[Edit files in parallel]`
 
-### 4. Token Efficiency
+### 7. Token Efficiency
 - Simple (typo): 200 tokens
 - Medium (bug fix): 1,000 tokens
 - Complex (feature): 2,500 tokens
