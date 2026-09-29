@@ -84,7 +84,22 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     try {
                         val client = VpnNetworkClient()
-                        val response = client.registerDevice(serverDomain, deviceName)
+
+                        // Generate session key pair for registration
+                        val nativeCore = com.vpn.NativeEncryptionCore()
+                        val pubKeyBuf = java.nio.ByteBuffer.allocateDirect(32)
+                        val privKeyBuf = java.nio.ByteBuffer.allocateDirect(32)
+
+                        if (nativeCore.generateSessionKeyPair(pubKeyBuf, privKeyBuf) != 0) {
+                            throw Exception("Failed to generate session keys")
+                        }
+
+                        val pubKeyBytes = java.nio.ByteBuffer.allocate(32)
+                        pubKeyBuf.rewind()
+                        pubKeyBytes.put(pubKeyBuf)
+                        val publicKeyBase64 = java.util.Base64.getEncoder().encodeToString(pubKeyBytes.array())
+
+                        val response = client.registerDevice(serverDomain, deviceName, publicKeyBase64)
 
                         val prefs = VpnPreferences(context)
                         prefs.saveOnboardingData(serverDomain, deviceName)

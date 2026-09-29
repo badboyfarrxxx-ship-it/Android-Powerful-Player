@@ -26,4 +26,8 @@ public class NativeEncryptionCore {
     public native void unmaskPacket(
         ByteBuffer packet, int pos, int len, long seed, long counter
     );
+
+    public native int generateSessionKeyPair(
+        ByteBuffer pubKeyBuf, ByteBuffer privKeyBuf
+    );
 }
