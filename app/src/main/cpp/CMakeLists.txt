@@ -10,4 +10,4 @@ add_library(vpn_player_core SHARED
 
 find_library(log-lib log)
 
-target_link_libraries(vpn_player_core ${log-lib})
+target_link_libraries(vpn_player_core ${log-lib} crypto)
