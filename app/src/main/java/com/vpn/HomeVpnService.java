@@ -47,7 +47,7 @@ public class HomeVpnService extends VpnService {
     private final AtomicLong bytesDown = new AtomicLong(0);
 
     // XOR Masking State
-    private long maskingSeed = 0xDEADBEEFCAFEBABE L;
+    private long maskingSeed = 0xDEADBEEFCAFEBABEL;
     private long txCounter = 0;
     private long rxCounter = 0;
     private int packetCount = 0;
